@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+*.egg-info/
+.cache/
+.mypy_cache/
+.pytest_cache/
+dist/
+build/
+
+# Local configuration (keep template only)
+config/*.yaml
+!config/auditx.yaml.default
+config/*.yml
+!config/auditx.yml.default
+

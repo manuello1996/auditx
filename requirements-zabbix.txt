@@ -1,0 +1,1 @@
+zabbix-utils>=0.1

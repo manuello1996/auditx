@@ -1,0 +1,31 @@
+# Default configuration template for AuditX.
+# Copy to config/auditx.yaml (or another *.yaml file) and customize.
+
+mysql:
+  host: db1.example.com
+  user: auditor
+  password: ${env:MYSQL_AUDITOR_PASS}
+  database: appdb
+
+zabbix:
+  api_url: https://zabbix.example.com/api_jsonrpc.php
+  # Provide either api_token or username/password (token takes precedence).
+  api_token: ""
+  username: auditor
+  password: ${env:ZABBIX_PASS}
+  # Primary configuration file used for duplicate parameter checks.
+  config_file: /etc/zabbix/zabbix_server.conf
+  # Keys listed here are allowed to appear multiple times (case-insensitive).
+  config_duplicate_ignore_keys: [LoadModule]
+  # Hosts that are temporarily allowed to run without encryption (names, case-insensitive).
+  host_encryption_ignore_hosts: []
+  # Template names that are exempt from server-version comparison.
+  template_version_ignore: []
+  hosts_unavailable_threshold_hours: 24
+  lld_min_refresh_seconds: 3600
+  item_min_refresh_seconds: 60
+  item_refresh_excluded_keys: []
+  unsupported_item_threshold_minutes: 60
+
+linux:
+  method: local

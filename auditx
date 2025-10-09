@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Wrapper to run the AuditX CLI inside the local virtual environment.
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_ACTIVATE="${ROOT_DIR}/.venv/bin/activate"
+
+if [[ ! -f "${VENV_ACTIVATE}" ]]; then
+    echo "Virtualenv not found at ${ROOT_DIR}/.venv." >&2
+    echo "Create it with 'python3 -m venv .venv' and install dependencies before retrying." >&2
+    exit 1
+fi
+
+# shellcheck disable=SC1090
+source "${VENV_ACTIVATE}"
+
+if [[ -z "${PYTHONPATH:-}" ]]; then
+    export PYTHONPATH="${ROOT_DIR}/src"
+else
+    export PYTHONPATH="${PYTHONPATH}:${ROOT_DIR}/src"
+fi
+
+exec python -m auditx.cli "$@"
