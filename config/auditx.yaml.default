@@ -26,6 +26,9 @@ zabbix:
   item_min_refresh_seconds: 60
   item_refresh_excluded_keys: []
   unsupported_item_threshold_minutes: 60
+  team_codes:
+    - Team_1
+    - Team_2
 
 linux:
   method: local

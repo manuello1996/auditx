@@ -43,10 +43,12 @@ class ZabbixItemNeverSupportedCheck(BaseCheck):
             )
 
         never_supported = [entry for entry in (_prepare_entry(item) for item in items_fact) if entry is not None]
+        grouped = _group_by_host(never_supported)
         details = {
             "never_supported_items": never_supported,
             "never_supported_count": len(never_supported),
             "total_items": len(items_fact),
+            "never_supported_by_host": grouped,
         }
 
         if not never_supported:
@@ -58,15 +60,16 @@ class ZabbixItemNeverSupportedCheck(BaseCheck):
             )
 
         summary = _build_summary(never_supported)
+        explanation = _format_by_host("Never-supported items by host", grouped) or None
         return CheckResult(
             self.meta,
             Status.FAIL,
             summary=summary,
             details=details,
+            explanation=explanation,
             remediation=(
                 "Investigate the affected items, fix their data sources, or disable them to prevent permanent unsupported state."
-            ),
-            explanation="Never-supported items reduce poller capacity and mislead health dashboards.",
+            )
         )
 
 
@@ -124,6 +127,46 @@ def _coerce_str(value: Any) -> str:
     if value is None:
         return ""
     return str(value)
+
+
+def _group_by_host(items: Sequence[Mapping[str, Any]]) -> Dict[str, list[Dict[str, Any]]]:
+    grouped: Dict[str, list[Dict[str, Any]]] = {}
+    for entry in items:
+        hosts = entry.get("hosts") or []
+        if not isinstance(hosts, Sequence):
+            continue
+        for host in hosts:
+            host_name = str(host).strip()
+            if not host_name:
+                continue
+            grouped.setdefault(host_name, []).append(dict(entry))
+    return grouped
+
+
+def _format_by_host(title: str, mapping: Mapping[str, Sequence[Mapping[str, Any]]], *, host_limit: int = 10, item_limit: int = 8) -> str:
+    if not mapping:
+        return ""
+    lines: list[str] = [title + ":"]
+    hosts = sorted(mapping.keys())
+    extra_hosts = 0
+    for idx, host in enumerate(hosts):
+        if idx >= host_limit:
+            extra_hosts = len(hosts) - host_limit
+            break
+        items = mapping[host]
+        lines.append(f"- {host}:")
+        extra_items = 0
+        for jdx, item in enumerate(items):
+            if jdx >= item_limit:
+                extra_items = len(items) - item_limit
+                break
+            name = str(item.get("name") or item.get("id") or "item")
+            lines.append(f"  - {name}")
+        if extra_items:
+            lines.append(f"  - … (+{extra_items} more)")
+    if extra_hosts:
+        lines.append(f"… (+{extra_hosts} more hosts)")
+    return "\n".join(lines)
 
 
 __all__ = ["ZabbixItemNeverSupportedCheck"]

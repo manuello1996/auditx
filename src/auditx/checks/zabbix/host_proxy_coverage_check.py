@@ -6,6 +6,7 @@ from auditx.core.base import BaseCheck
 from auditx.core.models import CheckMeta, CheckResult, RunContext, Severity, Status
 
 _DEFAULT_THRESHOLD_RATIO = 0.1
+_DEFAULT_PROXY_RATIO = 0.1
 
 
 class ZabbixHostProxyCoverageCheck(BaseCheck):
@@ -19,11 +20,17 @@ class ZabbixHostProxyCoverageCheck(BaseCheck):
         severity=Severity.MEDIUM,
         tags={"scalability", "best-practice"},
         description=(
-            "Alerts when too many monitored hosts are polled directly by the Zabbix server. "
-            "Best practice is to front hosts with proxies whenever possible."
+            "Alerts when too many monitored hosts are polled directly by the server or by single proxies. "
+            "Policy: <= 10% by server (configurable) and <= 10% by proxy (configurable); the rest via proxy-groups."
         ),
-        explanation="Polling large fleets directly from the server increases latency and can overwhelm data collection threads.",
-        remediation="Deploy proxies near monitored networks and move hosts off direct server polling.",
+        explanation=(
+            "Polling large fleets directly from the server increases latency and can overwhelm data collection threads. "
+            "Relying heavily on single proxies can also create bottlenecks; proxy-groups distribute load and add resilience."
+        ),
+        remediation=(
+            "Deploy proxies and proxy-groups near monitored networks. Move hosts off direct server polling and "
+            "from single proxies to proxy-groups where feasible."
+        ),
         inputs=(
             {
                 "key": "zabbix.server_monitored_ratio_threshold",
@@ -32,6 +39,15 @@ class ZabbixHostProxyCoverageCheck(BaseCheck):
                 "description": (
                     "Maximum allowed fraction (0.0-1.0) of monitored hosts collected directly by "
                     "the Zabbix server before raising an alert. Defaults to 0.1 (10%)."
+                ),
+            },
+            {
+                "key": "zabbix.proxy_monitored_ratio_threshold",
+                "required": False,
+                "secret": False,
+                "description": (
+                    "Maximum allowed fraction (0.0-1.0) of monitored hosts collected via a single proxy (not proxy-group) "
+                    "before raising an alert. Defaults to 0.1 (10%)."
                 ),
             },
         ),
@@ -102,21 +118,31 @@ class ZabbixHostProxyCoverageCheck(BaseCheck):
             )
 
         server_hosts = classification[MonitorRole.SERVER]
-        ratio = len(server_hosts) / known_total
-        threshold = _resolve_threshold_ratio(ctx.config)
+        proxy_hosts = classification[MonitorRole.PROXY]
+        proxy_group_hosts = classification[MonitorRole.PROXY_GROUP]
+
+        server_ratio = len(server_hosts) / known_total
+        proxy_ratio = len(proxy_hosts) / known_total
+        proxy_group_ratio = len(proxy_group_hosts) / known_total
+
+        server_threshold = _resolve_threshold_ratio(ctx.config)
+        proxy_threshold = _resolve_proxy_threshold_ratio(ctx.config)
         details = {
             "server_hosts": server_hosts,
-            "proxy_hosts": classification[MonitorRole.PROXY],
-            "proxy_group_hosts": classification[MonitorRole.PROXY_GROUP],
+            "proxy_hosts": proxy_hosts,
+            "proxy_group_hosts": proxy_group_hosts,
             "total_monitored_hosts": known_total,
-            "server_monitored_ratio": ratio,
-            "allowed_ratio": threshold,
+            "server_monitored_ratio": server_ratio,
+            "proxy_monitored_ratio": proxy_ratio,
+            "proxy_group_ratio": proxy_group_ratio,
+            "allowed_server_ratio": server_threshold,
+            "allowed_proxy_ratio": proxy_threshold,
         }
 
-        if ratio > threshold:
+        if server_ratio > server_threshold:
             summary = (
                 f"{len(server_hosts)} of {known_total} monitored host(s) are handled directly by the "
-                f"server ({_format_ratio(ratio)}), exceeding the allowed {_format_ratio(threshold)}."
+                f"server ({_format_ratio(server_ratio)}), exceeding the allowed {_format_ratio(server_threshold)}."
             )
             if server_hosts:
                 summary += f" Affected hosts: {_format_host_list(server_hosts)}."
@@ -129,9 +155,25 @@ class ZabbixHostProxyCoverageCheck(BaseCheck):
                 remediation="Deploy additional proxies or migrate the listed hosts onto existing proxies.",
             )
 
+        if proxy_ratio > proxy_threshold:
+            summary = (
+                f"{len(proxy_hosts)} of {known_total} monitored host(s) are handled by single proxies "
+                f"({_format_ratio(proxy_ratio)}), exceeding the allowed {_format_ratio(proxy_threshold)}."
+            )
+            if proxy_hosts:
+                summary += f" Affected hosts: {_format_host_list(proxy_hosts)}."
+            return CheckResult(
+                self.meta,
+                Status.FAIL,
+                summary=summary,
+                details=details,
+                explanation="Too many hosts on single proxies can create bottlenecks; prefer proxy-groups for scale/resilience.",
+                remediation="Create or expand proxy-groups and migrate hosts from single proxies to proxy-groups.",
+            )
+
         summary = (
-            f"{len(server_hosts)} of {known_total} monitored host(s) are handled directly by the server "
-            f"({_format_ratio(ratio)}), within the allowed {_format_ratio(threshold)}."
+            f"Server-monitored {_format_ratio(server_ratio)} and proxy-monitored {_format_ratio(proxy_ratio)} "
+            f"are within allowed thresholds (server {_format_ratio(server_threshold)}, proxy {_format_ratio(proxy_threshold)})."
         )
         return CheckResult(self.meta, Status.PASS, summary=summary, details=details)
 
@@ -213,6 +255,22 @@ def _resolve_threshold_ratio(config: Mapping[str, Any]) -> float:
         return value
     except (TypeError, ValueError):
         return _DEFAULT_THRESHOLD_RATIO
+
+
+def _resolve_proxy_threshold_ratio(config: Mapping[str, Any]) -> float:
+    section = config.get("zabbix") if isinstance(config, Mapping) else None
+    candidate: Any = None
+    if isinstance(section, Mapping):
+        candidate = section.get("proxy_monitored_ratio_threshold")
+    try:
+        if candidate is None:
+            raise ValueError
+        value = float(candidate)
+        if value < 0:
+            raise ValueError
+        return value
+    except (TypeError, ValueError):
+        return _DEFAULT_PROXY_RATIO
 
 
 def _as_id_list(value: Any) -> List[str]:

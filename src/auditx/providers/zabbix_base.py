@@ -159,6 +159,7 @@ def _zabbix_base(
                 output="extend",
                 selectInterfaces="extend",
                 selectParentTemplates=["templateid", "name"],  # Add template relationships
+                selectGroups=["groupid", "name"],
                 filter={"status": 0},
                 sortfield=["name"],
             )
@@ -246,6 +247,7 @@ def _zabbix_base(
                     "vendor_version",
                 ],
                 selectGroups=["groupid", "name"],
+                selectMacros=["macro", "type", "value"],
             )
 
             templates = []
@@ -269,6 +271,29 @@ def _zabbix_base(
                 vendor_version = _coerce_str(template.get("vendor_version")) or None
                 version = raw_version or vendor_version
 
+                # Macros for template (name-only, no values)
+                macros: list[dict[str, str | int | bool]] = []
+                raw_macros = template.get("macros") or []
+                if isinstance(raw_macros, Iterable):
+                    for m in raw_macros:
+                        if not isinstance(m, Mapping):
+                            continue
+                        _val_text = _coerce_str(m.get("value"))
+                        _has_value = bool(_val_text)
+                        _is_placeholder = False
+                        if _has_value:
+                            _stripped = _val_text.strip()
+                            if _stripped.upper() == "CHANGE_IF_NEEDED" or (_stripped.startswith("<") and _stripped.endswith(">")):
+                                _is_placeholder = True
+                        macros.append(
+                            {
+                                "macro": _coerce_str(m.get("macro")),
+                                "type": _coerce_int(m.get("type")),
+                                "has_value": _has_value,
+                                "is_placeholder": _is_placeholder,
+                            }
+                        )
+
                 templates.append(
                     {
                         "id": _coerce_str(template.get("templateid")),
@@ -278,6 +303,7 @@ def _zabbix_base(
                         "vendor_name": vendor_name,
                         "vendor_version": vendor_version,
                         "groups": groups,
+                        "macros": macros,
                     }
                 )
 
@@ -285,6 +311,147 @@ def _zabbix_base(
             facts["zabbix.template.total"] = len(templates)
         except Exception as err:
             facts["zabbix.warning.template_summary"] = str(err)
+
+        # Host groups inventory for naming/policy checks
+        try:
+            report("Fetching host groups")
+            group_records = client.hostgroup.get(  # type: ignore[attr-defined]
+                output=["groupid", "name"],
+            )
+
+            hostgroups: list[dict[str, str]] = []
+            for record in (group_records or []):
+                if not isinstance(record, Mapping):
+                    continue
+                hostgroups.append(
+                    {
+                        "id": _coerce_str(record.get("groupid")),
+                        "name": _coerce_str(record.get("name")),
+                    }
+                )
+
+            facts["zabbix.hostgroups"] = hostgroups
+            facts["zabbix.hostgroup.total"] = len(hostgroups)
+        except Exception as err:
+            facts["zabbix.warning.hostgroup_summary"] = str(err)
+
+        # Dashboards
+        try:
+            report("Fetching dashboards")
+            dashboards = client.dashboard.get(output=["dashboardid", "name"])  # type: ignore[attr-defined]
+            normalised = []
+            for d in (dashboards or []):
+                if not isinstance(d, Mapping):
+                    continue
+                normalised.append({
+                    "id": _coerce_str(d.get("dashboardid")),
+                    "name": _coerce_str(d.get("name")),
+                })
+            facts["zabbix.dashboards"] = normalised
+            facts["zabbix.dashboard.total"] = len(normalised)
+        except Exception as err:
+            facts["zabbix.warning.dashboard_summary"] = str(err)
+
+        # Maintenances
+        try:
+            report("Fetching maintenances")
+            maints = client.maintenance.get(output=["maintenanceid", "name"])  # type: ignore[attr-defined]
+            normalised = []
+            for m in (maints or []):
+                if not isinstance(m, Mapping):
+                    continue
+                normalised.append({
+                    "id": _coerce_str(m.get("maintenanceid")),
+                    "name": _coerce_str(m.get("name")),
+                })
+            facts["zabbix.maintenances"] = normalised
+            facts["zabbix.maintenance.total"] = len(normalised)
+        except Exception as err:
+            facts["zabbix.warning.maintenance_summary"] = str(err)
+
+        # Services (IT services)
+        try:
+            report("Fetching services")
+            services = client.service.get(output=["serviceid", "name"])  # type: ignore[attr-defined]
+            normalised = []
+            for s in (services or []):
+                if not isinstance(s, Mapping):
+                    continue
+                normalised.append({
+                    "id": _coerce_str(s.get("serviceid")),
+                    "name": _coerce_str(s.get("name")),
+                })
+            facts["zabbix.services"] = normalised
+            facts["zabbix.service.total"] = len(normalised)
+        except Exception as err:
+            facts["zabbix.warning.service_summary"] = str(err)
+
+        # SLAs (if available)
+        try:
+            report("Fetching SLAs")
+            slas = client.sla.get(output=["slaid", "name"])  # type: ignore[attr-defined]
+            normalised = []
+            for s in (slas or []):
+                if not isinstance(s, Mapping):
+                    continue
+                normalised.append({
+                    "id": _coerce_str(s.get("slaid")),
+                    "name": _coerce_str(s.get("name")),
+                })
+            facts["zabbix.slas"] = normalised
+            facts["zabbix.sla.total"] = len(normalised)
+        except Exception as err:
+            facts["zabbix.warning.sla_summary"] = str(err)
+
+        # Actions (different event sources)
+        try:
+            report("Fetching actions")
+            actions = client.action.get(output=["actionid", "name", "eventsource"])  # type: ignore[attr-defined]
+            normalised = []
+            for a in (actions or []):
+                if not isinstance(a, Mapping):
+                    continue
+                normalised.append({
+                    "id": _coerce_str(a.get("actionid")),
+                    "name": _coerce_str(a.get("name")),
+                    "eventsource": _coerce_str(a.get("eventsource")),
+                })
+            facts["zabbix.actions"] = normalised
+            facts["zabbix.action.total"] = len(normalised)
+        except Exception as err:
+            facts["zabbix.warning.action_summary"] = str(err)
+
+        # Global macros
+        try:
+            report("Fetching global macros")
+            global_macros = client.usermacro.get(  # type: ignore[attr-defined]
+                output=["globalmacroid", "macro", "type", "value"],
+                globalmacro=1,
+            )
+            macros: list[dict[str, str | int | bool]] = []
+            for m in (global_macros or []):
+                if not isinstance(m, Mapping):
+                    continue
+                _val_text = _coerce_str(m.get("value"))
+                _has_value = bool(_val_text)
+                _is_placeholder = False
+                if _has_value:
+                    _stripped = _val_text.strip()
+                    if _stripped.upper() == "CHANGE_IF_NEEDED" or (_stripped.startswith("<") and _stripped.endswith(">")):
+                        _is_placeholder = True
+                macros.append(
+                    {
+                        "id": _coerce_str(m.get("globalmacroid") or m.get("macroid") or m.get("id")),
+                        "macro": _coerce_str(m.get("macro")),
+                        "type": _coerce_int(m.get("type")),
+                        "has_value": _has_value,
+                        "is_placeholder": _is_placeholder,
+                    }
+                )
+            facts["zabbix.global_macros"] = macros
+            facts["zabbix.global_macro.total"] = len(macros)
+        except Exception as err:
+            facts["zabbix.warning.global_macro_summary"] = str(err)
 
         try:
             report("Counting Zabbix users")
@@ -723,6 +890,21 @@ def _normalise_host_record(host: Dict[str, Any]) -> Dict[str, Any]:
                 if template_id:
                     template_ids.append(template_id)
 
+    # Process group membership
+    group_ids: list[str] = []
+    group_names: list[str] = []
+    raw_groups = host.get("groups") or []
+    if isinstance(raw_groups, Iterable):
+        for group in raw_groups:
+            if not isinstance(group, Mapping):
+                continue
+            gid = _coerce_str(group.get("groupid"))
+            gname = _coerce_str(group.get("name"))
+            if gid:
+                group_ids.append(gid)
+            if gname:
+                group_names.append(gname)
+
     proxy_ids = _collect_ids(
         host,
         (
@@ -764,6 +946,8 @@ def _normalise_host_record(host: Dict[str, Any]) -> Dict[str, Any]:
         "jmx_errors_from": _coerce_int(host.get("jmx_errors_from")) or interface_errors["jmx"],
         "interfaces": interfaces,
         "template_ids": template_ids,
+        "group_ids": group_ids,
+        "groups": group_names,
         "proxy_ids": proxy_ids,
         "proxy_group_ids": proxy_group_ids,
         "monitored_by": monitored_by,

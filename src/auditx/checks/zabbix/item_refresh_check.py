@@ -112,6 +112,9 @@ class ZabbixItemRefreshRateCheck(BaseCheck):
                 remediation="Confirm polling intervals are numeric and hosts are linked to each item before retrying.",
             )
 
+        offending_by_host = _group_by_host(offending)
+        unresolved_by_host = _group_by_host(unresolved)
+        ignored_by_host = _group_by_host(ignored_zero_delay)
         details_payload = {
             "threshold_seconds": threshold,
             "offending_items": offending,
@@ -121,6 +124,9 @@ class ZabbixItemRefreshRateCheck(BaseCheck):
             "excluded_items": excluded_items,
             "sample_size": considered_count,
             "total_items": len(items_fact),
+            "offending_by_host": offending_by_host,
+            "unresolved_by_host": unresolved_by_host,
+            "ignored_zero_delay_by_host": ignored_by_host,
         }
 
         if offending:
@@ -132,12 +138,13 @@ class ZabbixItemRefreshRateCheck(BaseCheck):
             )
             if offending_descriptions:
                 summary += f": {offending_descriptions}"
+            explanation = _format_by_host("Fast polling by host", offending_by_host) or None
             return CheckResult(
                 self.meta,
                 Status.FAIL,
                 summary=summary,
                 details=details_payload,
-                explanation="Fast polling starves other items and can overwhelm source systems.",
+                explanation=explanation,
                 remediation="Increase the delay for the listed items or move them to dependent metrics with preprocessing.",
             )
 
@@ -146,12 +153,13 @@ class ZabbixItemRefreshRateCheck(BaseCheck):
             summary = f"{len(unresolved)} item(s) have non-numeric refresh intervals"
             if unresolved_descriptions:
                 summary += f": {unresolved_descriptions}"
+            explanation = _format_by_host("Non-numeric refresh interval by host", unresolved_by_host) or None
             return CheckResult(
                 self.meta,
                 Status.WARN,
                 summary=summary,
                 details=details_payload,
-                explanation="Non-numeric delays hide actual polling frequency.",
+                explanation=explanation,
                 remediation="Normalize item delays to seconds or update templates to use supported interval syntax.",
             )
 
@@ -258,6 +266,49 @@ def _parse_key_string(text: str) -> set[str]:
         return {segment.strip() for segment in inner.split(",") if segment.strip()}
     if "," in stripped:
         return {segment.strip() for segment in stripped.split(",") if segment.strip()}
+    return set()
+
+
+def _group_by_host(items: Sequence[Mapping[str, Any]]) -> Dict[str, list[Dict[str, Any]]]:
+    grouped: Dict[str, list[Dict[str, Any]]] = {}
+    for entry in items:
+        hosts = entry.get("hosts") or []
+        if not isinstance(hosts, Sequence):
+            continue
+        for host in hosts:
+            host_name = str(host).strip()
+            if not host_name:
+                continue
+            grouped.setdefault(host_name, []).append(dict(entry))
+    return grouped
+
+
+def _format_by_host(title: str, mapping: Mapping[str, Sequence[Mapping[str, Any]]], *, host_limit: int = 10, item_limit: int = 8) -> str:
+    if not mapping:
+        return ""
+    lines: list[str] = [title + ":"]
+    hosts = sorted(mapping.keys())
+    extra_hosts = 0
+    for idx, host in enumerate(hosts):
+        if idx >= host_limit:
+            extra_hosts = len(hosts) - host_limit
+            break
+        items = mapping[host]
+        lines.append(f"- {host}:")
+        extra_items = 0
+        for jdx, item in enumerate(items):
+            if jdx >= item_limit:
+                extra_items = len(items) - item_limit
+                break
+            name = str(item.get("name") or item.get("id") or "item")
+            delay = item.get("delay_seconds")
+            suffix = f" (delay: {_format_duration(delay)})" if delay is not None else ""
+            lines.append(f"  - {name}{suffix}")
+        if extra_items:
+            lines.append(f"  - … (+{extra_items} more)")
+    if extra_hosts:
+        lines.append(f"… (+{extra_hosts} more hosts)")
+    return "\n".join(lines)
     return {stripped}
 
 

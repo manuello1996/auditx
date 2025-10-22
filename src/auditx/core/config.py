@@ -29,6 +29,8 @@ _DEFAULT_TEMPLATE_YAML = dedent(
       item_min_refresh_seconds: 60
       item_refresh_excluded_keys: []
       unsupported_item_threshold_minutes: 60
+      team_codes: []
+      proxy_monitored_ratio_threshold: 0.1
 
     linux:
       method: local

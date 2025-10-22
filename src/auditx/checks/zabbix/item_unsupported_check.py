@@ -84,6 +84,9 @@ class ZabbixItemUnsupportedDurationCheck(BaseCheck):
                 recent_unsupported.append(entry)
 
         total_considered = len(long_unsupported) + len(recent_unsupported) + len(missing_timestamp)
+        long_by_host = _group_by_host(long_unsupported)
+        recent_by_host = _group_by_host(recent_unsupported)
+        missing_by_host = _group_by_host(missing_timestamp)
         details = {
             "threshold_minutes": threshold_minutes,
             "long_unsupported_items": long_unsupported,
@@ -91,6 +94,9 @@ class ZabbixItemUnsupportedDurationCheck(BaseCheck):
             "unsupported_without_timestamp": missing_timestamp,
             "unsupported_item_count": total_considered,
             "total_items": len(items_fact),
+            "long_unsupported_by_host": long_by_host,
+            "recent_unsupported_by_host": recent_by_host,
+            "unsupported_without_timestamp_by_host": missing_by_host,
         }
 
         if long_unsupported:
@@ -98,15 +104,16 @@ class ZabbixItemUnsupportedDurationCheck(BaseCheck):
                 f"{len(long_unsupported)} item(s) unsupported for longer than {_format_duration(threshold_minutes)}",
                 long_unsupported,
             )
+            explanation = _format_by_host("Unsupported (over threshold) by host", long_by_host) or None
             return CheckResult(
                 self.meta,
                 Status.FAIL,
                 summary=summary,
                 details=details,
+                explanation=explanation,
                 remediation=(
                     "Restore item functionality or disable the affected items once the underlying collection issues are solved."
-                ),
-                explanation="Unsupported items longer than the threshold waste poller resources and hide outages.",
+                )
             )
 
         if missing_timestamp:
@@ -114,25 +121,29 @@ class ZabbixItemUnsupportedDurationCheck(BaseCheck):
                 f"{len(missing_timestamp)} unsupported item(s) lack a timestamp to determine duration",
                 missing_timestamp,
             )
+            explanation = _format_by_host("Unsupported (no timestamp) by host", missing_by_host) or None
             return CheckResult(
                 self.meta,
                 Status.WARN,
                 summary=summary,
                 details=details,
+                explanation=explanation,
                 remediation=(
                     "Verify item history retention and ensure unsupported items provide timing information for accurate diagnostics."
-                ),
-                explanation="Missing timestamps make it impossible to judge outage duration.",
+                )
             )
 
         summary = f"No enabled items unsupported longer than {_format_duration(threshold_minutes)}"
         if recent_unsupported:
             summary += f" ({len(recent_unsupported)} item(s) recently unsupported)"
+        # For pass, optionally include a short grouping of recently unsupported to aid triage
+        explanation = _format_by_host("Recently unsupported by host", recent_by_host) if recent_unsupported else None
         return CheckResult(
             self.meta,
             Status.PASS,
             summary=summary,
             details=details,
+            explanation=explanation,
         )
 
 
@@ -205,6 +216,88 @@ def _format_duration(value: Any) -> str:
             return f"{days:g}d"
         return f"{hours:g}h"
     return f"{numeric:g}m"
+
+
+def _group_by_host(items: Sequence[Mapping[str, Any]]) -> Dict[str, list[Dict[str, Any]]]:
+    grouped: Dict[str, list[Dict[str, Any]]] = {}
+    for entry in items:
+        hosts = entry.get("hosts") or []
+        if not isinstance(hosts, Sequence):
+            continue
+        for host in hosts:
+            host_name = str(host).strip()
+            if not host_name:
+                continue
+            grouped.setdefault(host_name, []).append(dict(entry))
+    return grouped
+
+
+def _format_by_host(title: str, mapping: Mapping[str, Sequence[Mapping[str, Any]]], *, host_limit: int = 10, item_limit: int = 8) -> str:
+    if not mapping:
+        return ""
+    lines: list[str] = [title + ":"]
+    hosts = sorted(mapping.keys())
+    extra_hosts = 0
+    for idx, host in enumerate(hosts):
+        if idx >= host_limit:
+            extra_hosts = len(hosts) - host_limit
+            break
+        items = mapping[host]
+        lines.append(f"- {host}:")
+        extra_items = 0
+        for jdx, item in enumerate(items):
+            if jdx >= item_limit:
+                extra_items = len(items) - item_limit
+                break
+            name = str(item.get("name") or item.get("id") or "item")
+            age = item.get("age_minutes")
+            suffix = f" (age: {_format_duration(age)})" if isinstance(age, (int, float)) else ""
+            lines.append(f"  - {name}{suffix}")
+        if extra_items:
+            lines.append(f"  - … (+{extra_items} more)")
+    if extra_hosts:
+        lines.append(f"… (+{extra_hosts} more hosts)")
+    return "\n".join(lines)
+
+
+def _group_by_host(items: Sequence[Mapping[str, Any]]) -> Dict[str, list[Dict[str, Any]]]:
+    grouped: Dict[str, list[Dict[str, Any]]] = {}
+    for entry in items:
+        hosts = entry.get("hosts") or []
+        if not isinstance(hosts, Sequence):
+            continue
+        for host in hosts:
+            host_name = str(host).strip()
+            if not host_name:
+                continue
+            grouped.setdefault(host_name, []).append(dict(entry))
+    return grouped
+
+
+def _format_by_host(title: str, mapping: Mapping[str, Sequence[Mapping[str, Any]]], *, host_limit: int = 10, item_limit: int = 8) -> str:
+    if not mapping:
+        return ""
+    lines: list[str] = [title + ":"]
+    hosts = sorted(mapping.keys())
+    extra_hosts = 0
+    for idx, host in enumerate(hosts):
+        if idx >= host_limit:
+            extra_hosts = len(hosts) - host_limit
+            break
+        items = mapping[host]
+        lines.append(f"- {host}:")
+        extra_items = 0
+        for jdx, item in enumerate(items):
+            if jdx >= item_limit:
+                extra_items = len(items) - item_limit
+                break
+            name = str(item.get("name") or item.get("id") or "item")
+            lines.append(f"  - {name}")
+        if extra_items:
+            lines.append(f"  - … (+{extra_items} more)")
+    if extra_hosts:
+        lines.append(f"… (+{extra_hosts} more hosts)")
+    return "\n".join(lines)
 
 
 __all__ = ["ZabbixItemUnsupportedDurationCheck"]

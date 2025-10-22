@@ -8,6 +8,7 @@ __pycache__/
 .pytest_cache/
 dist/
 build/
+.vscode/
 
 # Local configuration (keep template only)
 config/*.yaml
